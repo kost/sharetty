@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tokio::io::{AsyncRead, AsyncWrite};
-use std::ffi::OsString;
+
 
 #[cfg(unix)]
 use pty_process as pty_impl;

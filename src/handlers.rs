@@ -1,13 +1,12 @@
 use axum::{
     body::Body,
-    extract::{Multipart, Path, Query},
-    http::{header, StatusCode, Uri},
+    extract::{Multipart, Path},
+    http::{StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use std::path::{Path as StdPath, PathBuf};
 use tower_http::services::ServeFile;
 use tokio::fs;
-use serde::Deserialize;
 use tower::ServiceExt;
 
 // Re-use Asset from server? Or define simple asset reading interface?

@@ -263,7 +263,7 @@ async fn handle_proxy_request(start_url: Url, req_id: String, method: String, ur
         Ok((ws_stream, _)) => {
             let (mut ws_write, ws_read) = ws_stream.split();
             
-            use futures::{StreamExt, Stream};
+            use futures::{StreamExt};
             let body_stream = ws_read.filter_map(|msg| async {
                 match msg {
                     Ok(Message::Binary(data)) => Some(Ok::<_, std::io::Error>(axum::body::Bytes::from(data))),
@@ -580,7 +580,7 @@ async fn connect_quic(config: Config, router: Router) {
                                  let r = router_handle.clone();
                                  tokio::spawn(async move {
                                      match conn.open_bi().await {
-                                         Ok((mut tx, mut rx)) => {
+                                         Ok((mut tx, rx)) => {
                                              if let Err(_) = send_quic_msg(&mut tx, Message::Text(req_id)).await { return; }
                                              
                                              handle_proxy_request_quic(r, method, uri, headers, tx, rx).await;

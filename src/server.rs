@@ -1,32 +1,32 @@
 use axum::{
+    body::Body, // Restored Body
     response::{Html, IntoResponse, Response, Redirect},
-    routing::{get, post, any},
+    routing::{get, any},
     Router,
     http::{StatusCode, header, Uri, Request},
-    body::Body,
-    extract::{Multipart, Path, State, Query}, // Added Query
-    extract::ws::{Message, WebSocket, WebSocketUpgrade}, // Added WS types
+    extract::{Path, State, Query, WebSocketUpgrade, Multipart}, // Restored Multipart, removed ConnectInfo
+    extract::ws::{Message, WebSocket},
 };
 use tower::ServiceExt;
 use std::net::SocketAddr;
-use tower_http::{trace::TraceLayer, services::ServeFile};
+use tower_http::trace::TraceLayer;
 use rust_embed::RustEmbed;
 use axum_server::tls_rustls::RustlsConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{Notify, mpsc, broadcast, Mutex}; // Added sync primitives
+use std::sync::atomic::AtomicUsize;
+use tokio::sync::{Notify, mpsc, broadcast};
 use std::fs::File;
 use std::io::BufReader;
-use rustls::pki_types::PrivateKeyDer;
+use rustls::pki_types::{PrivateKeyDer}; // Removed CertificateDer
 use rustls_pemfile::{certs, private_key};
 use quinn::crypto::rustls::QuicServerConfig;
 use axum::middleware::{self, Next};
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use base64::prelude::*;
-use tokio::io::AsyncWriteExt;
-use dashmap::DashMap; // Added DashMap
-use futures::{sink::SinkExt, stream::StreamExt}; // Added futures traits
+
+use dashmap::DashMap;
+use futures::{sink::SinkExt, stream::StreamExt};
 use serde::{Deserialize, Serialize};
 use bytes::{BytesMut, Buf, BufMut}; // Added bytes for buffering
 
@@ -60,7 +60,6 @@ pub struct Session {
     mode: String,
     // Broadcast Mode
     broadcast_tx: broadcast::Sender<Message>, // PTY output -> Viewers
-    data_input_tx: Option<mpsc::Sender<Message>>, // Viewers -> Target Data (Set when Data connects)
     // Independent Mode
     // Map viewer_id -> (ws_sender to viewer) pending connection from target
     pending_viewers: DashMap<String, mpsc::Sender<Message>>,
@@ -595,7 +594,6 @@ async fn handle_quic_connection(connection: quinn::Connection, state: AppState) 
                          control_tx: control_tx.clone(),
                          mode: mode.clone(),
                          broadcast_tx: broadcast_tx,
-                         data_input_tx: None,
                          pending_viewers: DashMap::new(),
                      });
                      
@@ -783,7 +781,6 @@ async fn handle_control(mut socket: WebSocket, state: AppState) {
                  control_tx: control_tx.clone(),
                  mode: mode.clone(),
                  broadcast_tx: broadcast_tx,
-                 data_input_tx: None,
                  pending_viewers: DashMap::new(),
              });
              
@@ -1009,6 +1006,7 @@ async fn proxy_request(state: AppState, session_id: String, method: String, uri:
         }
     });
 
+    #[allow(unused_assignments)]
     let mut meta_json = String::new();
     loop {
         match rx.recv().await {
@@ -1044,7 +1042,7 @@ async fn proxy_request(state: AppState, session_id: String, method: String, uri:
             }
         }
         
-        use futures::{Stream, StreamExt};
+        use futures::{StreamExt};
         let msg_stream = futures::stream::unfold(rx, |mut rx| async move {
             let res = rx.recv().await;
             res.map(|val| (val, rx))
