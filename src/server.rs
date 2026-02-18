@@ -177,7 +177,7 @@ impl TunnelReceiver {
 
 #[derive(Debug)]
 pub enum Tunnel {
-    WebSocket(WebSocket),
+    WebSocket(Box<WebSocket>),
     Quic(quinn::SendStream, quinn::RecvStream),
 }
 
@@ -185,7 +185,8 @@ impl Tunnel {
     pub fn split(self) -> (TunnelSender, TunnelReceiver) {
         match self {
             Tunnel::WebSocket(ws) => {
-                let (tx, rx) = ws.split();
+                let ws_inner = *ws;
+                let (tx, rx) = ws_inner.split();
                 (TunnelSender::WebSocket(tx), TunnelReceiver::WebSocket(rx))
             }
             Tunnel::Quic(send, recv) => {
@@ -478,31 +479,30 @@ async fn start_quic(endpoint: quinn::Endpoint, app: Router, app_state: AppState)
                             let (parts, _) = req.into_parts();
                             let axum_req = Request::from_parts(parts, Body::empty());
                             
-                            match app.oneshot(axum_req).await {
-                                Ok(response) => {
-                                    let (parts, body) = response.into_parts();
-                                    let parse_response = http::Response::from_parts(parts, ());
-                                    
-                                    match stream.send_response(parse_response).await {
-                                        Ok(_) => {
-                                            use http_body_util::BodyExt;
-                                            if let Ok(collected) = body.collect().await {
-                                               let bytes = collected.to_bytes();
-                                               if let Err(e) = stream.send_data(bytes).await {
-                                                    tracing::error!("Failed to send stream data: {}", e);
-                                               }
-                                            }
-                                            if let Err(e) = stream.finish().await {
-                                                 tracing::error!("Failed to finish stream: {}", e);
-                                            }
+                            let response = match app.oneshot(axum_req).await {
+                                Ok(r) => r,
+                                Err(_) => unreachable!("Router::oneshot should be infallible"),
+                            };
+                            let (parts, body) = response.into_parts();
+                            let parse_response = http::Response::from_parts(parts, ());
+                            
+                            match stream.send_response(parse_response).await {
+                                    Ok(_) => {
+                                        use http_body_util::BodyExt;
+                                        if let Ok(collected) = body.collect().await {
+                                           let bytes = collected.to_bytes();
+                                           if let Err(e) = stream.send_data(bytes).await {
+                                                tracing::error!("Failed to send stream data: {}", e);
+                                           }
                                         }
-                                        Err(e) => {
-                                             tracing::error!("Failed to send response: {}", e);
+                                        if let Err(e) = stream.finish().await {
+                                             tracing::error!("Failed to finish stream: {}", e);
                                         }
                                     }
+                                    Err(e) => {
+                                         tracing::error!("Failed to send response: {}", e);
+                                    }
                                 }
-                                Err(_) => {}
-                            }
                         });
                     }
                     Ok(None) => break,
@@ -593,7 +593,7 @@ async fn handle_quic_connection(connection: quinn::Connection, state: AppState) 
                      let session = Arc::new(Session {
                          control_tx: control_tx.clone(),
                          mode: mode.clone(),
-                         broadcast_tx: broadcast_tx,
+                         broadcast_tx,
                          pending_viewers: DashMap::new(),
                      });
                      
@@ -647,6 +647,7 @@ async fn handle_quic_tunnel_stream(tunnel: Tunnel, state: AppState) {
             let mut val_buf = vec![0u8; len];
             if recv.read_exact(&mut val_buf).await.is_err() { return None; }
             
+
             String::from_utf8(val_buf).ok()
         }.await;
         
@@ -780,7 +781,7 @@ async fn handle_control(mut socket: WebSocket, state: AppState) {
              let session = Arc::new(Session {
                  control_tx: control_tx.clone(),
                  mode: mode.clone(),
-                 broadcast_tx: broadcast_tx,
+                 broadcast_tx,
                  pending_viewers: DashMap::new(),
              });
              
@@ -793,7 +794,7 @@ async fn handle_control(mut socket: WebSocket, state: AppState) {
 
              let send_task = tokio::spawn(async move {
                 while let Some(msg) = control_rx.recv().await {
-                    if sender.send(msg).await.is_err() { break; }
+                    if (sender.send(msg).await).is_err() { break; }
                 }
              });
 
@@ -949,7 +950,7 @@ async fn handle_tunnel_socket(socket: WebSocket, state: AppState, params: std::c
     };
     
     if let Some((_, sender)) = state.tunnel_waiters.remove(req_id) {
-        let _ = sender.send(Tunnel::WebSocket(socket));
+        let _ = sender.send(Tunnel::WebSocket(Box::new(socket)));
     }
 }
 
@@ -984,7 +985,7 @@ async fn proxy_request(state: AppState, session_id: String, method: String, uri:
     let (tx, rx) = tokio::sync::oneshot::channel();
     state.tunnel_waiters.insert(req_id.clone(), tx);
 
-    if let Err(_) = session.control_tx.send(Message::Text(serde_json::to_string(&cmd).unwrap())).await {
+    if (session.control_tx.send(Message::Text(serde_json::to_string(&cmd).unwrap())).await).is_err() {
         state.tunnel_waiters.remove(&req_id);
         return (StatusCode::BAD_GATEWAY, "Failed to contact target").into_response();
     }

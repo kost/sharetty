@@ -31,11 +31,10 @@ pub enum ClientMessage {
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
-    if state.config.once {
-        if state.active_connections.fetch_add(1, Ordering::SeqCst) >= 1 {
-            warn!("Connection rejected due to --once flag limit");
-            return;
-        }
+    if state.config.once 
+        && state.active_connections.fetch_add(1, Ordering::SeqCst) >= 1 {
+        warn!("Connection rejected due to --once flag limit");
+        return;
     }
 
     let cmd = state.config.command.clone();

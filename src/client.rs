@@ -99,27 +99,24 @@ pub async fn start(config: Config) {
 
                 // Wait for Registration response
                 while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            match serde_json::from_str::<ServerMessage>(&text) {
-                                Ok(ServerMessage::Registered { id }) => {
-                                    tracing::info!("Registered session: {}", id);
-                                    session_id = id;
-                                    
-                                    // In Broadcast mode, start data connection immediately
-                                    if !config.independent {
-                                        spawn_data_connection(url.clone(), session_id.clone(), None, config.clone());
-                                    }
-                                    break; // Go to main loop
+                    if let Ok(Message::Text(text)) = msg {
+                        match serde_json::from_str::<ServerMessage>(&text) {
+                            Ok(ServerMessage::Registered { id }) => {
+                                tracing::info!("Registered session: {}", id);
+                                session_id = id;
+                                
+                                // In Broadcast mode, start data connection immediately
+                                if !config.independent {
+                                    spawn_data_connection(url.clone(), session_id.clone(), None, config.clone());
                                 }
-                                Ok(ServerMessage::Error { message }) => {
-                                    tracing::error!("Registration failed: {}", message);
-                                    return; // Fatal error or retry?
-                                }
-                                _ => {}
+                                break; // Go to main loop
                             }
+                            Ok(ServerMessage::Error { message }) => {
+                                tracing::error!("Registration failed: {}", message);
+                                return; // Fatal error or retry?
+                            }
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
                 
@@ -371,8 +368,8 @@ async fn send_quic_msg(send: &mut quinn::SendStream, msg: Message) -> Result<(),
             buf.extend_from_slice(&len.to_be_bytes());
             buf.extend_from_slice(data);
             tracing::info!("Sending QUIC Text msg: {} bytes. Header: {:?}", buf.len(), &buf[0..std::cmp::min(10, buf.len())]);
-            send.write_all(&buf).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            send.flush().await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            send.write_all(&buf).await.map_err(std::io::Error::other)?;
+            send.flush().await.map_err(std::io::Error::other)
         }
         Message::Binary(b) => {
              let mut buf = Vec::with_capacity(5 + b.len());
@@ -381,8 +378,8 @@ async fn send_quic_msg(send: &mut quinn::SendStream, msg: Message) -> Result<(),
             buf.extend_from_slice(&len.to_be_bytes());
             buf.extend_from_slice(&b);
             tracing::info!("Sending QUIC msg: {} bytes. Header: {:?}", buf.len(), &buf[0..std::cmp::min(10, buf.len())]);
-            send.write_all(&buf).await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-            send.flush().await.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+            send.write_all(&buf).await.map_err(std::io::Error::other)?;
+            send.flush().await.map_err(std::io::Error::other)
         }
         _ => Ok(())
     }
@@ -391,6 +388,9 @@ async fn send_quic_msg(send: &mut quinn::SendStream, msg: Message) -> Result<(),
 async fn recv_quic_msg(recv: &mut quinn::RecvStream) -> Option<Result<Message, std::io::Error>> {
     let mut type_buf = [0u8; 1];
     if let Err(e) = recv.read_exact(&mut type_buf).await {
+         if let quinn::ReadExactError::FinishedEarly(_) = e {
+             return None;
+         }
         tracing::error!("Recv type failed: {}", e);
         return None; 
     }
@@ -542,18 +542,12 @@ async fn connect_quic(config: Config, router: Router) {
         
         let mut session_id = String::new();
         while let Some(msg) = recv_quic_msg(&mut recv).await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    match serde_json::from_str::<ServerMessage>(&text) {
-                        Ok(ServerMessage::Registered { id }) => {
-                            tracing::info!("Registered session: {}", id);
-                            session_id = id;
-                            break;
-                        }
-                        _ => {}
-                    }
+            if let Ok(Message::Text(text)) = msg {
+                if let Ok(ServerMessage::Registered { id }) = serde_json::from_str::<ServerMessage>(&text) {
+                    tracing::info!("Registered session: {}", id);
+                    session_id = id;
+                    break;
                 }
-                _ => {}
             }
         }
         
@@ -569,31 +563,28 @@ async fn connect_quic(config: Config, router: Router) {
         
         // Read loop
         while let Some(msg) = recv_quic_msg(&mut recv).await {
-             match msg {
-                Ok(Message::Text(text)) => {
-                    if let Ok(cmd) = serde_json::from_str::<ServerMessage>(&text) {
-                        match cmd {
-                            ServerMessage::Spawn { viewer_id: _ } => {
-                            },
-                            ServerMessage::ProxyRequest { req_id, method, uri, headers } => {
-                                 let conn = connection_handle.clone();
-                                 let r = router_handle.clone();
-                                 tokio::spawn(async move {
-                                     match conn.open_bi().await {
-                                         Ok((mut tx, rx)) => {
-                                             if let Err(_) = send_quic_msg(&mut tx, Message::Text(req_id)).await { return; }
-                                             
-                                             handle_proxy_request_quic(r, method, uri, headers, tx, rx).await;
-                                         }
-                                         Err(e) => tracing::error!("Failed to open tunnel stream: {}", e),
+             if let Ok(Message::Text(text)) = msg {
+                if let Ok(cmd) = serde_json::from_str::<ServerMessage>(&text) {
+                    match cmd {
+                        ServerMessage::Spawn { viewer_id: _ } => {
+                        },
+                        ServerMessage::ProxyRequest { req_id, method, uri, headers } => {
+                             let conn = connection_handle.clone();
+                             let r = router_handle.clone();
+                             tokio::spawn(async move {
+                                 match conn.open_bi().await {
+                                     Ok((mut tx, rx)) => {
+                                         if (send_quic_msg(&mut tx, Message::Text(req_id)).await).is_err() { return; }
+                                         
+                                         handle_proxy_request_quic(r, method, uri, headers, tx, rx).await;
                                      }
-                                 });
-                            },
-                            _ => {}
-                        }
-                    } 
-                }
-                _ => {}
+                                     Err(e) => tracing::error!("Failed to open tunnel stream: {}", e),
+                                 }
+                             });
+                        },
+                        _ => {}
+                    }
+                } 
              }
         }
         tracing::info!("Control channel closed. Reconnecting...");
@@ -648,11 +639,11 @@ async fn handle_proxy_request_quic(
     };
     
     let meta_json = serde_json::to_string(&meta).unwrap();
-    if let Err(_) = send_quic_msg(&mut tx, Message::Text(meta_json)).await { return; }
+    if (send_quic_msg(&mut tx, Message::Text(meta_json)).await).is_err() { return; }
     
     let mut stream = response.into_body().into_data_stream();
     while let Some(Ok(chunk)) = stream.next().await {
-        if let Err(_) = send_quic_msg(&mut tx, Message::Binary(chunk.to_vec())).await { break; }
+        if (send_quic_msg(&mut tx, Message::Binary(chunk.to_vec())).await).is_err() { break; }
     }
     let _ = tx.finish();
 }
