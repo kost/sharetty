@@ -20,7 +20,8 @@ async fn test_server_connection() {
 
     // Give it some time to start, and retry connection
     let url = format!("ws://127.0.0.1:{}/ws", port);
-    let mut retries = 10;
+    // Increase retries significantly to account for compilation time in CI/tests
+    let mut retries = 30;
     let mut ws_stream = None;
     
     while retries > 0 {
@@ -30,7 +31,10 @@ async fn test_server_connection() {
                 ws_stream = Some(stream);
                 break;
             }
-            Err(_) => {
+            Err(e) => {
+                if retries % 5 == 0 {
+                    println!("Connection attempt failed: {}. Retrying...", e);
+                }
                 retries -= 1;
             }
         }
