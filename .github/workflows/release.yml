@@ -1,0 +1,137 @@
+name: Release Builds
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  STRIP: 1
+
+jobs:
+  build-linux:
+    name: Build Linux & Cross
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build All Targets
+        run: make dist
+
+      - name: Prepare Artifacts
+        shell: bash
+        run: |
+          mkdir dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Linux Targets
+          cp bin/x86_64-unknown-linux-musl/sharetty dist/sharetty-${VERSION}-linux-x86_64
+          cp bin/i686-unknown-linux-musl/sharetty dist/sharetty-${VERSION}-linux-i686
+          cp bin/aarch64-unknown-linux-musl/sharetty dist/sharetty-${VERSION}-linux-aarch64
+          cp bin/armv7-unknown-linux-musleabihf/sharetty dist/sharetty-${VERSION}-linux-armv7
+          cp bin/riscv64gc-unknown-linux-gnu/sharetty dist/sharetty-${VERSION}-linux-riscv64
+          # Windows GNU Target
+          cp bin/x86_64-pc-windows-gnu/sharetty.exe dist/sharetty-${VERSION}-windows-gnu-x86_64.exe
+          # FreeBSD Target
+          cp bin/x86_64-unknown-freebsd/sharetty dist/sharetty-${VERSION}-freebsd-x86_64
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: dist/*
+          if-no-files-found: error
+
+  build-windows-msvc:
+    name: Build Windows MSVC
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build MSVC Targets
+        run: make msvc
+
+      - name: Prepare Artifacts
+        shell: bash
+        run: |
+          mkdir dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp bin/x86_64-pc-windows-msvc/sharetty.exe dist/sharetty-${VERSION}-windows-msvc-x86_64.exe
+          cp bin/i686-pc-windows-msvc/sharetty.exe dist/sharetty-${VERSION}-windows-msvc-i686.exe
+          cp bin/aarch64-pc-windows-msvc/sharetty.exe dist/sharetty-${VERSION}-windows-msvc-aarch64.exe
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msvc-builds
+          path: dist/*
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build macOS Targets
+        run: make macos
+
+      - name: Prepare Artifacts
+        shell: bash
+        run: |
+          mkdir dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          cp bin/x86_64-apple-darwin/sharetty dist/sharetty-${VERSION}-macos-x86_64
+          cp bin/aarch64-apple-darwin/sharetty dist/sharetty-${VERSION}-macos-aarch64
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-builds
+          path: dist/*
+          if-no-files-found: error
+
+  create-release:
+    name: Create Release
+    needs: [build-linux, build-windows-msvc, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten Artifacts
+        run: |
+          mkdir dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -R dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
