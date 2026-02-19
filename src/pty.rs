@@ -12,6 +12,8 @@ use winptyrs as pty_impl;
 use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use tokio::sync::mpsc;
+#[cfg(windows)]
+use std::ffi::OsString;
 
 pub struct Pty {
     #[cfg(unix)]
