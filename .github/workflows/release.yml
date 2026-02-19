@@ -65,7 +65,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc
 
       - name: Build MSVC Targets
         run: make msvc
@@ -76,7 +76,6 @@ jobs:
           mkdir dist
           VERSION="${GITHUB_REF_NAME#v}"
           cp bin/x86_64-pc-windows-msvc/sharetty.exe dist/sharetty-${VERSION}-windows-msvc-x86_64.exe
-          cp bin/aarch64-pc-windows-msvc/sharetty.exe dist/sharetty-${VERSION}-windows-msvc-aarch64.exe
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
